@@ -1,43 +1,113 @@
 import { useState, useCallback } from 'react'
-import { Upload, FileText, Sparkles } from 'lucide-react'
+import { Upload, FileText, Copy, ClipboardPaste, ArrowRight, ArrowLeft } from 'lucide-react'
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Textarea } from '@/components/ui/Textarea'
-import { Spinner } from '@/components/ui/Spinner'
 import { ScrollArea } from '@/components/ui/ScrollArea'
 import { usePrdStore } from '@/stores/prdStore'
 import { useSettingsStore } from '@/stores/settingsStore'
-import { convertPrdToStories } from '@/lib/claude'
+import { generateId } from '@/lib/utils'
+import type { Story, Prd } from '@/types'
+
+const PRD_CONVERSION_PROMPT = `You convert product requirement documents into structured user stories.
+
+## Output
+Return ONLY valid JSON (no markdown, no explanation):
+
+{
+  "title": "Feature name",
+  "stories": [
+    {
+      "id": "story-1",
+      "title": "Short action-oriented title",
+      "description": "As a [user], I want [goal] so that [benefit]",
+      "acceptanceCriteria": [
+        "Specific, testable criterion",
+        "Another criterion"
+      ]
+    }
+  ]
+}
+
+## Rules
+1. Small stories: Each completable in ONE Claude Code iteration (15-30 min)
+2. Ordered by dependency: Foundation/setup stories first
+3. Testable criteria: An AI must be able to verify each criterion
+4. 3-8 stories typical: Break large features into atomic pieces
+5. No vague criteria: Bad: "Works well". Good: "Returns 200 status"
+
+## PRD to convert:
+
+`
+
+type Step = 'input' | 'paste-response' | 'done'
 
 export function PrdPanel() {
-  const { rawPrdText, setRawPrdText, setPrd, isConverting, setIsConverting, error, setError, prd } = usePrdStore()
-  const { settings, addToast } = useSettingsStore()
+  const { rawPrdText, setRawPrdText, setPrd, setError, prd } = usePrdStore()
+  const { addToast } = useSettingsStore()
   const [isDragOver, setIsDragOver] = useState(false)
+  const [step, setStep] = useState<Step>('input')
+  const [jsonResponse, setJsonResponse] = useState('')
 
-  const handleConvert = async () => {
+  const handleCopyPrompt = async () => {
     if (!rawPrdText.trim()) {
       addToast({ message: 'Please enter a PRD first', type: 'error' })
       return
     }
 
-    if (!settings.apiKey) {
-      addToast({ message: 'Please set your API key in settings', type: 'error' })
+    const fullPrompt = PRD_CONVERSION_PROMPT + rawPrdText
+    try {
+      await navigator.clipboard.writeText(fullPrompt)
+      addToast({ message: 'Prompt copied! Paste it in claude.ai', type: 'success' })
+      setStep('paste-response')
+    } catch {
+      addToast({ message: 'Failed to copy to clipboard', type: 'error' })
+    }
+  }
+
+  const handleParseResponse = () => {
+    if (!jsonResponse.trim()) {
+      addToast({ message: 'Please paste the JSON response from Claude', type: 'error' })
       return
     }
 
-    setIsConverting(true)
-    setError(null)
-
     try {
-      const result = await convertPrdToStories(rawPrdText, settings.apiKey)
-      setPrd(result)
-      addToast({ message: `Created ${result.stories.length} stories`, type: 'success' })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to convert PRD'
-      setError(message)
-      addToast({ message, type: 'error' })
-    } finally {
-      setIsConverting(false)
+      // Try to extract JSON from response (handle markdown code blocks)
+      let jsonStr = jsonResponse
+      const jsonMatch = jsonResponse.match(/```(?:json)?\s*([\s\S]*?)```/)
+      if (jsonMatch) {
+        jsonStr = jsonMatch[1]
+      }
+
+      const parsed = JSON.parse(jsonStr.trim())
+
+      // Transform to full Story objects
+      const stories: Story[] = parsed.stories.map((s: { id?: string; title: string; description: string; acceptanceCriteria: string[] }) => ({
+        id: s.id || generateId(),
+        title: s.title,
+        description: s.description,
+        acceptanceCriteria: s.acceptanceCriteria,
+        status: 'backlog' as const,
+        passes: false,
+        iteration: null,
+        startedAt: null,
+        completedAt: null,
+        filesChanged: [],
+        notes: '',
+      }))
+
+      const prdData: Prd = {
+        title: parsed.title,
+        createdAt: new Date().toISOString(),
+        stories,
+      }
+
+      setPrd(prdData)
+      setStep('done')
+      addToast({ message: `Created ${stories.length} stories`, type: 'success' })
+    } catch {
+      setError('Failed to parse JSON. Make sure you copied the complete response.')
+      addToast({ message: 'Failed to parse JSON response', type: 'error' })
     }
   }
 
@@ -65,16 +135,28 @@ export function PrdPanel() {
     setIsDragOver(false)
   }, [])
 
+  const handleReset = () => {
+    setPrd(null as never)
+    setRawPrdText('')
+    setJsonResponse('')
+    setStep('input')
+  }
+
   return (
     <Card className="flex flex-col h-full">
       <CardHeader className="pb-3">
         <CardTitle className="text-base flex items-center gap-2">
           <FileText className="h-4 w-4" />
           PRD Input
+          {step !== 'done' && !prd && (
+            <span className="text-xs font-normal text-muted-foreground ml-auto">
+              Step {step === 'input' ? '1' : '2'} of 2
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden">
-        {!prd ? (
+        {step === 'input' && !prd && (
           <>
             <div
               className={`flex-1 relative ${isDragOver ? 'ring-2 ring-primary ring-offset-2' : ''}`}
@@ -98,29 +180,64 @@ export function PrdPanel() {
               )}
             </div>
 
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-
             <Button
-              onClick={handleConvert}
-              disabled={!rawPrdText.trim() || isConverting}
+              onClick={handleCopyPrompt}
+              disabled={!rawPrdText.trim()}
               className="w-full"
             >
-              {isConverting ? (
-                <>
-                  <Spinner size="sm" className="mr-2" />
-                  Converting...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="h-4 w-4 mr-2" />
-                  Convert to Stories
-                </>
-              )}
+              <Copy className="h-4 w-4 mr-2" />
+              Copy Prompt for Claude
+              <ArrowRight className="h-4 w-4 ml-2" />
             </Button>
+            <p className="text-xs text-muted-foreground text-center">
+              Uses your Claude MAX subscription - no API key needed
+            </p>
           </>
-        ) : (
+        )}
+
+        {step === 'paste-response' && !prd && (
+          <>
+            <div className="bg-muted/50 rounded-md p-3 text-sm">
+              <p className="font-medium mb-1">Next steps:</p>
+              <ol className="list-decimal list-inside space-y-1 text-muted-foreground text-xs">
+                <li>Open <a href="https://claude.ai" target="_blank" rel="noopener noreferrer" className="text-primary underline">claude.ai</a></li>
+                <li>Paste the copied prompt</li>
+                <li>Copy Claude's JSON response</li>
+                <li>Paste it below</li>
+              </ol>
+            </div>
+
+            <div className="flex-1 relative">
+              <Textarea
+                value={jsonResponse}
+                onChange={(e) => setJsonResponse(e.target.value)}
+                placeholder={'Paste Claude\'s JSON response here...\n\n{\n  "title": "...",\n  "stories": [...]\n}'}
+                className="h-full resize-none text-sm font-mono"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setStep('input')}
+                className="flex-1"
+              >
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
+              </Button>
+              <Button
+                onClick={handleParseResponse}
+                disabled={!jsonResponse.trim()}
+                className="flex-1"
+              >
+                <ClipboardPaste className="h-4 w-4 mr-2" />
+                Parse Stories
+              </Button>
+            </div>
+          </>
+        )}
+
+        {prd && (
           <ScrollArea className="flex-1">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -142,10 +259,7 @@ export function PrdPanel() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  setPrd(null as never)
-                  setRawPrdText('')
-                }}
+                onClick={handleReset}
                 className="w-full"
               >
                 Start Over
