@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { Eye, EyeOff } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -7,7 +6,6 @@ import { useSettingsStore } from '@/stores/settingsStore'
 
 export function SettingsDialog() {
   const { settings, setSettings, settingsOpen, setSettingsOpen, addToast } = useSettingsStore()
-  const [showApiKey, setShowApiKey] = useState(false)
   const [localSettings, setLocalSettings] = useState(settings)
 
   const handleOpen = () => {
@@ -31,29 +29,6 @@ export function SettingsDialog() {
         </DialogHeader>
 
         <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Claude API Key</label>
-            <div className="relative">
-              <Input
-                type={showApiKey ? 'text' : 'password'}
-                value={localSettings.apiKey}
-                onChange={(e) => setLocalSettings({ ...localSettings, apiKey: e.target.value })}
-                placeholder="sk-ant-..."
-                className="pr-10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Your API key is stored locally and never sent anywhere except Anthropic's API.
-            </p>
-          </div>
-
           <div className="space-y-2">
             <label className="text-sm font-medium">Project Path</label>
             <Input
